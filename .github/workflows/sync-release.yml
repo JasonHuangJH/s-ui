@@ -6,7 +6,7 @@ on:
   workflow_dispatch:      # 允许手动触发
 
 jobs:
-  mirror-s-ui:
+  sync-release:
     runs-on: ubuntu-latest
     permissions:
       contents: write
