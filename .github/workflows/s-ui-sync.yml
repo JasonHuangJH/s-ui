@@ -13,7 +13,7 @@ jobs:
 
     env:
       # 在这里填入你想同步的原作者仓库名
-      SOURCE_REPO: "sprov-00/s-ui" 
+      SOURCE_REPO: "alireza0/s-ui" 
 
     steps:
       - name: 获取原仓库最新版本
