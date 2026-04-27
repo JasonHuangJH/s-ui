@@ -1,0 +1,81 @@
+name: 终极全量镜像同步 (代码+Release)
+
+on:
+  schedule:
+    - cron: '0 7 * * *' # 每天早上 7 点运行
+  workflow_dispatch:      # 支持手动触发
+
+jobs:
+  ultra-mirror:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # 必须有权限写入代码和发布 Release
+
+    env:
+      SOURCE_REPO: "alireza0/s-ui" # 这里以 s-ui 为例
+      UPSTREAM_URL: "https://github.com/alireza0/s-ui"
+
+    steps:
+      # --- 第一阶段：同步代码 (Sync Fork) ---
+      - name: 检出我的仓库代码
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0 # 必须拉取全部历史，否则无法 merge
+          ref: master     # 确保在你的主分支上操作
+
+      - name: 配置 Git 信息
+        run: |
+          git config --global user.name "GitHub Action"
+          git config --global user.email "action@github.com"
+
+      - name: 合并原作者代码
+        run: |
+          git remote add upstream ${{ env.UPSTREAM_URL }}
+          git fetch upstream
+          # 尝试合并原作者的 master 分支
+          if git merge upstream/master; then
+            git push origin master
+            echo "代码同步完成。"
+          else
+            echo "代码合并冲突！可能需要手动处理。"
+            exit 1
+          fi
+
+      # --- 第二阶段：同步 Release 资产 ---
+      - name: 检查最新版本号
+        id: check_version
+        run: |
+          LATEST_TAG=$(curl -s https://api.github.com/repos/${{ env.SOURCE_REPO }}/releases/latest | jq -r .tag_name)
+          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
+
+      - name: 检查我的仓库是否存在该 Release
+        id: check_mine
+        run: |
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ env.LATEST_TAG }})
+          if [ "$HTTP_STATUS" == "200" ]; then
+            echo "RELEASE_EXISTS=true" >> $GITHUB_ENV
+          else
+            echo "RELEASE_EXISTS=false" >> $GITHUB_ENV
+          fi
+
+      - name: 搬运 Release 资产
+        if: env.RELEASE_EXISTS == 'false'
+        run: |
+          mkdir -p ./sync_dist
+          # 批量下载所有附件
+          curl -s https://api.github.com/repos/${{ env.SOURCE_REPO }}/releases/latest \
+          | jq -r '.assets[].browser_download_url' \
+          | xargs -n 1 -P 4 wget -P ./sync_dist/
+
+      - name: 发布新的 Release
+        if: env.RELEASE_EXISTS == 'false'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ env.LATEST_TAG }}
+          name: ${{ env.LATEST_TAG }}镜像备份
+          body: |
+            自动镜像自 ${{ env.SOURCE_REPO }}
+            同步日期: $(date +'%Y-%m-%d %H:%M:%S')
+          files: ./sync_dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
