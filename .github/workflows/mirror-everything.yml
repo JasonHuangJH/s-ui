@@ -1,0 +1,95 @@
+name: 镜像站全自动同步 (代码+资产)
+
+on:
+  schedule:
+    - cron: '0 7 * * *' # 每天早上 7 点自动运行
+  workflow_dispatch:      # 支持点击按钮手动运行
+
+jobs:
+  full-sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # 赋予 Actions 修改代码和发布 Release 的权限
+
+    env:
+      SOURCE_REPO: "alireza0/s-ui" # 原作者仓库
+      UPSTREAM_URL: "https://github.com/alireza0/s-ui.git"
+
+    steps:
+      # 1. 检出你的仓库代码
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 获取完整历史以确保能成功合并
+
+      - name: 配置 Git 环境
+        run: |
+          git config --global user.name "GitHub Action"
+          git config --global user.email "action@github.com"
+
+      # 2. 自动同步代码 (解决 master/main 命名问题)
+      - name: 同步上游代码 (Sync Fork)
+        run: |
+          git remote add upstream ${{ env.UPSTREAM_URL }}
+          git fetch upstream
+          
+          # 自动获取当前分支名 (main 或 master)
+          CURRENT_BRANCH=$(git branch --show-current)
+          # 自动获取上游默认分支名
+          UPSTREAM_DEFAULT=$(git remote show upstream | grep "HEAD branch" | cut -d' ' -f5)
+          
+          echo "当前本地分支: $CURRENT_BRANCH"
+          echo "上游默认分支: $UPSTREAM_DEFAULT"
+          
+          # 执行合并
+          git checkout $CURRENT_BRANCH
+          if git merge upstream/$UPSTREAM_DEFAULT; then
+            git push origin $CURRENT_BRANCH
+            echo "代码同步成功！"
+          else
+            echo "代码冲突，请手动处理。"
+            exit 1
+          fi
+
+      # 3. 检查并同步 Release 资产
+      - name: 检查 Release 状态
+        id: release_check
+        run: |
+          # 获取原作者最新的 Tag
+          LATEST_TAG=$(curl -s https://api.github.com/repos/${{ env.SOURCE_REPO }}/releases/latest | jq -r .tag_name)
+          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
+          
+          # 检查自己仓库是否已有此 Tag
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://api.github.com/repos/${{ github.repository }}/releases/tags/$LATEST_TAG)
+          if [ "$HTTP_STATUS" == "200" ]; then
+            echo "NEED_SYNC=false" >> $GITHUB_ENV
+          else
+            echo "NEED_SYNC=true" >> $GITHUB_ENV
+          fi
+
+      - name: 搬运所有 Release 资产
+        if: env.NEED_SYNC == 'true'
+        run: |
+          mkdir -p ./downloads
+          # 下载原作者 Release 下的所有文件
+          curl -s https://api.github.com/repos/${{ env.SOURCE_REPO }}/releases/latest \
+          | jq -r '.assets[].browser_download_url' \
+          | xargs -n 1 -P 4 wget -P ./downloads/
+          echo "文件搬运完成。"
+
+      - name: 创建并发布我的 Release
+        if: env.NEED_SYNC == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.LATEST_TAG }}
+          name: "镜像备份 - ${{ env.LATEST_TAG }}"
+          body: |
+            ## 自动镜像说明
+            - **源仓库**: [${{ env.SOURCE_REPO }}](https://github.com/${{ env.SOURCE_REPO }})
+            - **备份时间**: $(date +'%Y-%m-%d %H:%M:%S')
+            - **状态**: 自动同步成功，代码与二进制文件已对齐。
+          files: ./downloads/*
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
