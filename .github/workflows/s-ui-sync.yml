@@ -1,0 +1,57 @@
+name: s-ui 镜像备份
+
+on:
+  schedule:
+    - cron: '0 8 * * *' # 每天早上 8 点运行
+  workflow_dispatch:      # 允许手动触发
+
+jobs:
+  mirror-s-ui:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    env:
+      # 在这里填入你想同步的原作者仓库名
+      SOURCE_REPO: "sprov-00/s-ui" 
+
+    steps:
+      - name: 获取原仓库最新版本
+        id: get_tag
+        run: |
+          LATEST_TAG=$(curl -s https://api.github.com/repos/${{ env.SOURCE_REPO }}/releases/latest | jq -r .tag_name)
+          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
+          echo "发现最新版本: $LATEST_TAG"
+
+      - name: 检查我的仓库是否已有该版本
+        id: check_mine
+        run: |
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ env.LATEST_TAG }})
+          if [ "$HTTP_STATUS" == "200" ]; then
+            echo "EXISTS=true" >> $GITHUB_ENV
+          else
+            echo "EXISTS=false" >> $GITHUB_ENV
+          fi
+
+      - name: 搬运 Release 资产
+        if: env.EXISTS == 'false'
+        run: |
+          mkdir -p ./s_ui_assets
+          # 获取所有附件的下载链接并下载
+          curl -s https://api.github.com/repos/${{ env.SOURCE_REPO }}/releases/latest \
+          | jq -r '.assets[].browser_download_url' \
+          | xargs -n 1 -P 4 wget -P ./s_ui_assets/
+          echo "下载完成。"
+
+      - name: 发布到我的仓库
+        if: env.EXISTS == 'false'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ env.LATEST_TAG }}
+          name: s-ui Backup ${{ env.LATEST_TAG }}
+          body: |
+            自动同步自 ${{ env.SOURCE_REPO }}
+            同步时间: $(date +'%Y-%m-%d %H:%M:%S')
+          files: ./s_ui_assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
